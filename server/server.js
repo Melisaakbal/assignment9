@@ -1,7 +1,19 @@
 import express from "express";
 import cors from "cors";
-import { getAllBooks, getBookById } from "./booksStore.js";
-import { parsePositiveId, validateQueryParams } from "./validate.js";
+import {
+  getAllBooks,
+  getBookById,
+  createBook,
+  replaceBook,
+  updateBook,
+  deleteBook,
+} from "./booksStore.js";
+import {
+  parsePositiveId,
+  validateCompleteBook,
+  validatePatchBook,
+  validateQueryParams,
+} from "./validate.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -13,6 +25,18 @@ app.use(
   })
 );
 app.use(express.json());
+
+function hasDuplicateTitleAndAuthor(allBooks, title, author, excludeId = null) {
+  const normalizedTitle = title.toLowerCase();
+  const normalizedAuthor = author.toLowerCase();
+
+  return allBooks.some(
+    (book) =>
+      book.id !== excludeId &&
+      book.title.toLowerCase() === normalizedTitle &&
+      book.author.toLowerCase() === normalizedAuthor
+  );
+}
 
 function applyQueryOptions(booksList, filters) {
   let result = [...booksList];
@@ -83,6 +107,94 @@ app.get("/api/books/:id", async (req, res) => {
   return res.status(200).json(book);
 });
 
+app.post("/api/books", async (req, res) => {
+  const { error, value } = validateCompleteBook(req.body);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const allBooks = await getAllBooks();
+  if (hasDuplicateTitleAndAuthor(allBooks, value.title, value.author)) {
+    return res
+      .status(409)
+      .json({ error: "A book with the same title and author already exists" });
+  }
+
+  const created = await createBook(value);
+  return res
+    .status(201)
+    .location(`/api/books/${created.id}`)
+    .json(created);
+});
+
+app.put("/api/books/:id", async (req, res) => {
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: "Book id must be a positive integer" });
+  }
+
+  const existing = await getBookById(id);
+  if (!existing) {
+    return res.status(404).json({ error: "Book not found" });
+  }
+
+  const { error, value } = validateCompleteBook(req.body);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const allBooks = await getAllBooks();
+  if (hasDuplicateTitleAndAuthor(allBooks, value.title, value.author, id)) {
+    return res
+      .status(409)
+      .json({ error: "A book with the same title and author already exists" });
+  }
+
+  const updated = await replaceBook(id, value);
+  return res.status(200).json(updated);
+});
+
+app.patch("/api/books/:id", async (req, res) => {
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: "Book id must be a positive integer" });
+  }
+
+  const existing = await getBookById(id);
+  if (!existing) {
+    return res.status(404).json({ error: "Book not found" });
+  }
+
+  const { error, value } = validatePatchBook(req.body, existing);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const allBooks = await getAllBooks();
+  if (hasDuplicateTitleAndAuthor(allBooks, value.title, value.author, id)) {
+    return res
+      .status(409)
+      .json({ error: "A book with the same title and author already exists" });
+  }
+
+  const updated = await updateBook(id, value);
+  return res.status(200).json(updated);
+});
+
+app.delete("/api/books/:id", async (req, res) => {
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: "Book id must be a positive integer" });
+  }
+
+  const deleted = await deleteBook(id);
+  if (!deleted) {
+    return res.status(404).json({ error: "Book not found" });
+  }
+
+  return res.status(204).end();
+});
+
 app.get("/api/stats", async (req, res) => {
   const allBooks = await getAllBooks();
   const total = allBooks.length;
@@ -112,6 +224,10 @@ app.get("/api/stats", async (req, res) => {
     averageRating,
     byGenre,
   });
+});
+
+app.get("/api/crash", async (req, res) => {
+  throw new Error("Intentional crash to verify error middleware");
 });
 
 app.use("/api", (req, res) => {
