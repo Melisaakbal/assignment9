@@ -316,3 +316,40 @@ When the React client (`http://localhost:5173`) sends a `POST`, `PUT`, `PATCH`, 
 ## Intentional Crash Test Route
 
 `GET /api/crash` throws an error inside an `async` route handler so the four-parameter error middleware (`(err, req, res, next)`) can be verified; it logs the error on the server and responds with `500` and `{"error":"Something went wrong"}`.
+
+
+---
+
+## Reasoning Questions
+
+1. **Parameters.** `id` identifies a single specific resource in the REST hierarchy (`/api/books/3`), so it belongs in the route path, whereas `genre` and `sort` filter or order a collection without changing which resource endpoint is addressed. If `id` were placed in the query string (`GET /api/books?id=3`), the endpoint would semantically represent a filtered collection query rather than a direct resource address, complicating REST conventions for `PUT`, `PATCH`, and `DELETE` on a single item.
+
+2. **Body parsing.** When I moved `app.use(express.json())` below the route definitions and sent a `POST /api/books` request, `req.body` was `undefined` inside the route handler because the JSON body parser middleware had not run yet. As a result, `validateCompleteBook(req.body)` rejected the empty body and the server returned `400 Bad Request` (`{"error":"Request body must be a JSON object"}`).
+
+3. **One response.** When I removed `return` before `res.status(404).json({ error: "Book not found" })` in `GET /api/books/:id`, the handler sent the `404` response and then continued executing to `res.status(200).json(book)`. Express threw `Error [ERR_HTTP_HEADERS_SENT]: Cannot set headers after they are sent to the client`, which triggered the error middleware and logged a stack trace on the server.
+
+4. **PUT and PATCH.** `PATCH` is the better choice when toggling a book's `read` status or updating its `rating` from the book card, because only one or two fields change without needing to resend the entire book object. `PUT` is the better choice in the Edit Book form, where the user reviews and submits a complete replacement of all book fields (`title`, `author`, `year`, `genre`, `read`, `rating`).
+
+5. **CORS.** When I set `CLIENT_ORIGIN=http://localhost:9999` and opened the client on `http://localhost:5173`, the browser console blocked the response with a CORS policy error (`No 'Access-Control-Allow-Origin' header is present on the requested resource` / origin mismatch). The server still received and logged the request because CORS is enforced by browsers, not by the server blocking execution; `curl` also continued to work because `curl` is a command-line HTTP client that ignores browser Same-Origin / CORS restrictions.
+
+6. **Validation.** Client-side checks only improve user experience and can be bypassed easily by modifying the browser code, disabling form validation, or sending direct requests with `curl` or Postman. The server must validate every input independently to protect data integrity, enforce business rules (such as no rating when `read` is `false` and no duplicate title+author pairs), and return predictable `400` or `409` JSON errors.
+
+7. **State.** When I restarted the server (`node --watch server.js`), all newly added, edited, and deleted books disappeared and the list reverted to the initial 6 seed books. This shows that the data lives purely in volatile RAM inside the Node.js process (`booksStore.js`), and a persistent database (such as PostgreSQL or SQLite) or file storage is required to keep changes across restarts.
+
+---
+
+## Self-Study Notes
+
+- **`URLSearchParams`:** I learned from MDN that `URLSearchParams` automatically percent-encodes special characters (spaces, `&`, `?`, non-ASCII characters) when building query strings, preventing broken URLs or parameter injection when searching by title or author.
+- **`String.prototype.localeCompare`:** Using `a[field].localeCompare(b[field])` instead of `<` / `>` operators provides proper alphabetical ordering across uppercase/lowercase letters and locale-specific characters when sorting by `title` or `author`.
+- **Vite `import.meta.env` and `VITE_` prefix:** Vite exposes environment variables to client-side code via `import.meta.env`, but only variables prefixed with `VITE_` are bundled into the browser build so sensitive server-only secrets in `.env` are never leaked accidentally.
+- **Express 5 `204 No Content` responses:** In Express 5, sending `res.status(204).end()` cleanly terminates the response with no body and no `Content-Type` header, matching HTTP `204` semantics and ensuring the client does not attempt to parse an empty JSON body.
+- **`AbortController` and `AbortError`:** Passing `controller.signal` into `fetch()` and calling `controller.abort()` inside `useEffect`'s cleanup function cancels outdated in-flight requests when filters change rapidly; catching `err.name === "AbortError"` lets the UI ignore intentional cancellations without flashing false error banners.
+
+---
+
+## Challenges Faced
+
+- Ensuring `PATCH` validation checked the **merged** book state rather than only the incoming partial fields, especially when marking a rated book as unread (`read: false` requires `rating: null`).
+- Preventing `fetch` in `client/src/api/books.js` from sending `Content-Type: application/json` on `GET` and `DELETE` requests without bodies, and handling `204 No Content` responses before calling `response.json()`.
+
